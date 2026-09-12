@@ -3,14 +3,24 @@
 #include <bit>
 #include <cassert>
 #include <compare>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <version>
+
+#if defined(__cpp_lib_constexpr_cmath) && __cpp_lib_constexpr_cmath >= 202202L
+#include <cmath>
+#define SCRUPLE_HAS_CONSTEXPR_FMA 1
+#else
+#define SCRUPLE_HAS_CONSTEXPR_FMA 0
+#endif
 
 namespace Sigil
 {
     namespace detail
     {
+
         template <typename T>
         struct FloatTraits;
 
@@ -135,11 +145,17 @@ namespace Sigil
         template <typename T>
         constexpr TwoProductResult<T> two_product(T a, T b)
         {
+#if SCRUPLE_HAS_CONSTEXPR_FMA
+            const T prod = a * b;
+            const T err = std::fma(a, b, -prod);
+            return {prod, err};
+#else
             const T prod = a * b;
             const auto sa = detail::split(a);
             const auto sb = detail::split(b);
             const T err = ((sa.hi * sb.hi - prod) + sa.hi * sb.lo + sa.lo * sb.hi) + sa.lo * sb.lo;
             return {prod, err};
+#endif
         }
 
         template <typename T> constexpr T tight_upper_sum(T a, T b)
@@ -213,7 +229,6 @@ namespace Sigil
             return max_abs(lower, upper) < std::numeric_limits<T>::min();
         }
 
-        // Scruple's own default-error policy -- not a general utility.
         template <typename T, T Lower, T Upper>
         constexpr T default_twice_abs_err()
         {
@@ -225,17 +240,26 @@ namespace Sigil
         {
             return entirely_subnormal_or_zero<T>(Lower, Upper) ? T(0) : std::numeric_limits<T>::epsilon();
         }
-    } // detail
+    }
+
+    template <typename T, T Lower, T Upper, T TwiceAbsErr, T TwiceRelErr>
+    concept ValidScrupleParams =
+        std::floating_point<T> &&
+        (Lower <= Upper) &&
+        (TwiceAbsErr >= T(0)) &&
+        (TwiceRelErr >= T(0));
+
+    template <typename T, T SubLower, T SubUpper, T SupLower, T SupUpper>
+    concept RangeSubsetOf =
+        (SubLower >= SupLower) &&
+        (SubUpper <= SupUpper);
 
     template <typename T, T Lower, T Upper = Lower,
             T TwiceAbsErr = detail::default_twice_abs_err<T, Lower, Upper>(),
             T TwiceRelErr = detail::default_twice_rel_err<T, Lower, Upper>()>
+        requires ValidScrupleParams<T, Lower, Upper, TwiceAbsErr, TwiceRelErr>
     class Scruple
     {
-        static_assert(std::is_floating_point_v<T>, "Scruple requires a floating-point type");
-        static_assert(Lower <= Upper, "Scruple: lower bound must not exceed upper bound");
-        static_assert(TwiceAbsErr >= T(0) && TwiceRelErr >= T(0), "Scruple: error terms must be non-negative");
-
     public:
         using value_type = T;
 
@@ -257,11 +281,10 @@ namespace Sigil
         }
 
         template <T OtherLower, T OtherUpper>
+            requires RangeSubsetOf<T, OtherLower, OtherUpper, Lower, Upper>
         constexpr Scruple(const Scruple<T, OtherLower, OtherUpper, TwiceAbsErr, TwiceRelErr>& other) noexcept
             : m_value(other.value())
         {
-            static_assert(OtherLower >= Lower && OtherUpper <= Upper,
-                "Scruple: widening conversion requires the source range to be a subset of the target range");
         }
 
         constexpr T value() const { return m_value; }
