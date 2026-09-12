@@ -42,16 +42,6 @@ namespace Sigil
             static constexpr int bias = 1023;
         };
 
-        static_assert(std::is_same_v<FloatTraits<float>::Bits, std::uint32_t>);
-        static_assert(FloatTraits<float>::mantissa_bits == 23);
-        static_assert(FloatTraits<float>::exponent_bits == 8);
-        static_assert(FloatTraits<float>::bias == 127);
-
-        static_assert(std::is_same_v<FloatTraits<double>::Bits, std::uint64_t>);
-        static_assert(FloatTraits<double>::mantissa_bits == 52);
-        static_assert(FloatTraits<double>::exponent_bits == 11);
-        static_assert(FloatTraits<double>::bias == 1023);
-
         template <typename T> constexpr T dekker_splitter();
         template <> constexpr float dekker_splitter<float>() { return 4097.0f; }
         template <> constexpr double dekker_splitter<double>() { return 134217729.0; }
@@ -242,9 +232,31 @@ namespace Sigil
         }
     }
 
+    template <typename T>
+    concept floating_point =
+        std::numeric_limits<T>::is_specialized &&
+        requires
+        {
+            typename detail::FloatTraits<T>::Bits;
+            { detail::FloatTraits<T>::mantissa_bits } -> std::convertible_to<int>;
+            { detail::FloatTraits<T>::exponent_bits } -> std::convertible_to<int>;
+            { detail::FloatTraits<T>::bias } -> std::convertible_to<int>;
+        } &&
+        (sizeof(T) == sizeof(typename detail::FloatTraits<T>::Bits)) &&
+        std::regular<T> &&
+        std::totally_ordered<T> &&
+        requires (T a, T b)
+        {
+            { a + b } -> std::same_as<T>;
+            { a - b } -> std::same_as<T>;
+            { a * b } -> std::same_as<T>;
+            { a / b } -> std::same_as<T>;
+            { -a } -> std::same_as<T>;
+        };
+
     template <typename T, T Lower, T Upper, T TwiceAbsErr, T TwiceRelErr>
     concept ValidScrupleParams =
-        std::floating_point<T> &&
+        floating_point<T> &&
         (Lower <= Upper) &&
         (TwiceAbsErr >= T(0)) &&
         (TwiceRelErr >= T(0));
