@@ -186,6 +186,35 @@ namespace Sigil
             const T reconstructed = half * T(2);
             return reconstructed > total ? next_down(half) : half;
         }
+        {
+            const T q = a / b;
+            const auto pr = two_product(q, b);
+            const T d = pr.prod - a;
+            const auto s = two_sum(d, pr.err);
+            const T indicator = (s.sum != T(0)) ? s.sum : s.err;
+            if (b > T(0))
+            {
+                return indicator < T(0) ? next_up(q) : q;
+            }
+            return indicator > T(0) ? next_up(q) : q;
+        }
+
+        template <typename T> constexpr T tight_lower_quotient(T a, T b)
+        {
+            const T q = a / b;
+            const auto pr = two_product(q, b);
+            const T d = pr.prod - a;
+            const auto s = two_sum(d, pr.err);
+            const T indicator = (s.sum != T(0)) ? s.sum : s.err;
+            if (b > T(0))
+            {
+                return indicator > T(0) ? next_down(q) : q;
+            }
+            return indicator < T(0) ? next_down(q) : q;
+        }
+
+        template <typename T> constexpr T tight_upper_reciprocal(T x) { return tight_upper_quotient<T>(T(1), x); }
+        template <typename T> constexpr T tight_lower_reciprocal(T x) { return tight_lower_quotient<T>(T(1), x); }
     } // FloatUtils
 
     namespace detail
@@ -217,6 +246,24 @@ namespace Sigil
         constexpr bool entirely_subnormal_or_zero(T lower, T upper)
         {
             return max_abs(lower, upper) < std::numeric_limits<T>::min();
+        }
+
+        template <typename T>
+        constexpr T min4(T a, T b, T c, T d)
+        {
+            T m = a < b ? a : b;
+            m = c < m ? c : m;
+            m = d < m ? d : m;
+            return m;
+        }
+
+        template <typename T>
+        constexpr T max4(T a, T b, T c, T d)
+        {
+            T m = a > b ? a : b;
+            m = c > m ? c : m;
+            m = d > m ? d : m;
+            return m;
         }
 
         template <typename T, T Lower, T Upper>
@@ -265,6 +312,10 @@ namespace Sigil
     concept RangeSubsetOf =
         (SubLower >= SupLower) &&
         (SubUpper <= SupUpper);
+
+    template <typename T, T Lower, T Upper>
+    concept ExcludesZero =
+        (Lower > T(0)) || (Upper < T(0));
 
     template <typename T, T Lower, T Upper = Lower,
             T TwiceAbsErr = detail::default_twice_abs_err<T, Lower, Upper>(),
@@ -372,6 +423,116 @@ namespace Sigil
                             const Scruple<T, L2, U2, A2, R2>& rhs)
     {
         return lhs + (-rhs);
+    }
+
+    template <typename T, T L1, T U1, T A1, T R1, T L2, T U2, T A2, T R2>
+    constexpr auto operator*(const Scruple<T, L1, U1, A1, R1>& lhs,
+                            const Scruple<T, L2, U2, A2, R2>& rhs)
+    {
+        if constexpr (L2 == T(0) && U2 == T(0) && A2 == T(0) && R2 == T(0))
+        {
+            return Scruple<T, T(0), T(0), T(0), T(0)>(lhs.value() * rhs.value());
+        }
+        else if constexpr (L1 == T(0) && U1 == T(0) && A1 == T(0) && R1 == T(0))
+        {
+            return Scruple<T, T(0), T(0), T(0), T(0)>(lhs.value() * rhs.value());
+        }
+        else if constexpr (L2 == T(1) && U2 == T(1) && A2 == T(0) && R2 == T(0))
+        {
+            return Scruple<T, L1, U1, A1, R1>(lhs.value() * rhs.value());
+        }
+        else if constexpr (L1 == T(1) && U1 == T(1) && A1 == T(0) && R1 == T(0))
+        {
+            return Scruple<T, L2, U2, A2, R2>(lhs.value() * rhs.value());
+        }
+        else if constexpr (L1 == U1 && A1 == T(0) && R1 == T(0) &&
+                            L2 == U2 && A2 == T(0) && R2 == T(0))
+        {
+            constexpr auto tp = FloatUtils::two_product<T>(L1, L2);
+            constexpr T new_twice_abs_err = T(2) * FloatUtils::abs_val(tp.err);
+            return Scruple<T, tp.prod, tp.prod, new_twice_abs_err, T(0)>(
+                lhs.value() * rhs.value());
+        }
+        else
+        {
+            constexpr T p_ll_up = FloatUtils::tight_upper_product<T>(L1, L2);
+            constexpr T p_lu_up = FloatUtils::tight_upper_product<T>(L1, U2);
+            constexpr T p_ul_up = FloatUtils::tight_upper_product<T>(U1, L2);
+            constexpr T p_uu_up = FloatUtils::tight_upper_product<T>(U1, U2);
+            constexpr T new_upper = detail::max4<T>(p_ll_up, p_lu_up, p_ul_up, p_uu_up);
+
+            constexpr T p_ll_lo = FloatUtils::tight_lower_product<T>(L1, L2);
+            constexpr T p_lu_lo = FloatUtils::tight_lower_product<T>(L1, U2);
+            constexpr T p_ul_lo = FloatUtils::tight_lower_product<T>(U1, L2);
+            constexpr T p_uu_lo = FloatUtils::tight_lower_product<T>(U1, U2);
+            constexpr T new_lower = detail::min4<T>(p_ll_lo, p_lu_lo, p_ul_lo, p_uu_lo);
+
+            constexpr T eb1 = Scruple<T, L1, U1, A1, R1>::range_margin();
+            constexpr T eb2 = Scruple<T, L2, U2, A2, R2>::range_margin();
+            constexpr T max_abs_1 = detail::max_abs(L1, U1);
+            constexpr T max_abs_2 = detail::max_abs(L2, U2);
+
+            constexpr T term1 = FloatUtils::tight_upper_product<T>(max_abs_1, eb2);
+            constexpr T term2 = FloatUtils::tight_upper_product<T>(max_abs_2, eb1);
+            constexpr T term3 = FloatUtils::tight_upper_product<T>(eb1, eb2);
+            constexpr T sum12 = FloatUtils::tight_upper_sum<T>(term1, term2);
+            constexpr T propagated = FloatUtils::tight_upper_sum<T>(sum12, term3);
+
+            constexpr T new_max_abs = detail::max_abs(new_lower, new_upper);
+            constexpr T rounding = FloatUtils::ulp_at<T>(new_max_abs);
+
+            constexpr T new_twice_abs_err = FloatUtils::tight_upper_sum<T>(T(2) * propagated, rounding);
+            constexpr T new_twice_rel_err = T(0);
+
+            return Scruple<T, new_lower, new_upper, new_twice_abs_err, new_twice_rel_err>(
+                lhs.value() * rhs.value());
+        }
+    }
+
+    template <typename T, T L, T U, T A, T R>
+        requires ExcludesZero<T, L, U>
+    constexpr auto inverse(const Scruple<T, L, U, A, R>& x)
+    {
+        if constexpr (L == U && A == T(0) && R == T(0))
+        {
+            constexpr T q = T(1) / L;
+            constexpr T up_bound = FloatUtils::tight_upper_reciprocal<T>(L);
+            constexpr T lo_bound = FloatUtils::tight_lower_reciprocal<T>(L);
+            constexpr T new_twice_abs_err = T(2) * (up_bound - lo_bound);
+            return Scruple<T, q, q, new_twice_abs_err, T(0)>(T(1) / x.value());
+        }
+        else
+        {
+            constexpr T m = detail::min_abs(L, U);
+            constexpr T eb_m = FloatUtils::tight_upper_sum<T>(
+                A, FloatUtils::tight_upper_product<T>(R, m)) / T(2);
+            static_assert(m > eb_m,
+                "Scruple::inverse: the range's own declared error reaches too close to "
+                "zero for a bounded reciprocal to exist");
+
+            constexpr T new_upper = FloatUtils::tight_upper_reciprocal<T>(L);
+            constexpr T new_lower = FloatUtils::tight_lower_reciprocal<T>(U);
+
+            constexpr T denom = FloatUtils::tight_lower_product<T>(m, m - eb_m);
+            constexpr T propagated = FloatUtils::tight_upper_quotient<T>(eb_m, denom);
+
+            constexpr T new_max_abs = detail::max_abs(new_lower, new_upper);
+            constexpr T rounding = FloatUtils::ulp_at<T>(new_max_abs);
+
+            constexpr T new_twice_abs_err = FloatUtils::tight_upper_sum<T>(T(2) * propagated, rounding);
+            constexpr T new_twice_rel_err = T(0);
+
+            return Scruple<T, new_lower, new_upper, new_twice_abs_err, new_twice_rel_err>(
+                T(1) / x.value());
+        }
+    }
+
+    template <typename T, T L1, T U1, T A1, T R1, T L2, T U2, T A2, T R2>
+        requires ExcludesZero<T, L2, U2>
+    constexpr auto operator/(const Scruple<T, L1, U1, A1, R1>& lhs,
+                            const Scruple<T, L2, U2, A2, R2>& rhs)
+    {
+        return lhs * inverse(rhs);
     }
 
     template <typename T, T L1, T U1, T A1, T R1, T L2, T U2, T A2, T R2>
