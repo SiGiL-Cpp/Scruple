@@ -186,6 +186,8 @@ namespace Sigil
             const T reconstructed = half * T(2);
             return reconstructed > total ? next_down(half) : half;
         }
+
+        template <typename T> constexpr T tight_upper_quotient(T a, T b)
         {
             const T q = a / b;
             const auto pr = two_product(q, b);
